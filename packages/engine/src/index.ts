@@ -91,6 +91,8 @@ export {
 export {
   consoleLogger,
   silentLogger,
+  childLogger,
+  scopedAuditSink,
   InMemoryAuditLog,
   InMemoryAlerting,
   WebhookAlerting,
@@ -101,6 +103,7 @@ export {
   type Logger,
   type LogLevel,
   type LogFields,
+  type RequestScope,
   type AuditSink,
   type AuditEntry,
   type AuditDetail,

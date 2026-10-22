@@ -61,11 +61,14 @@ import { checkCompatibility } from "./compat";
 import {
   noopMetrics,
   silentLogger,
+  childLogger,
+  scopedAuditSink,
   type AuditEntry,
   type AuditSink,
   type Alerting,
   type Logger,
   type Metrics,
+  type RequestScope,
 } from "./observability";
 import type { CheckResult, GateContext, PreSettleGate } from "./gate";
 import {
@@ -195,6 +198,19 @@ export interface ExecuteOptions {
    * never funded; it expires on the anchor's side.
    */
   dryRun?: boolean;
+  /**
+   * Correlation id for the request that started this run — the HTTP layer's
+   * `X-Request-Id`. Stamped on every log line and audit entry the run produces,
+   * so a 500 at the edge can be tied back to the lines behind it. The engine
+   * never generates one; callers own the id.
+   */
+  requestId?: string;
+  /**
+   * W3C `traceparent` of the request that started this run, passed through as a
+   * field on the same lines. Full tracing (spans, export) is not the engine's
+   * job — this only keeps the ids correlatable until it is.
+   */
+  traceparent?: string;
 }
 
 /** The `cause` of a `DRY_RUN_COMPLETE` error: what the gate said before the run stopped. */
@@ -214,6 +230,27 @@ export interface DryRunReport {
  * flight and may yet be resolved either way by the anchor's refund report.
  */
 type RecordOutcome = (state: CorridorState, e?: CorridorError) => Promise<void>;
+
+/** The request context to stamp on a run's output, or undefined when there is none. */
+function requestScopeOf(opts: ExecuteOptions): RequestScope | undefined {
+  const { requestId, traceparent } = opts;
+  if (!requestId && !traceparent) return undefined;
+  return { ...(requestId && { requestId }), ...(traceparent && { traceparent }) };
+}
+
+/**
+ * Rebind the injected logger/audit sink to `scope`, leaving every other dep (and
+ * dep identity elsewhere) untouched. Scoping happens once per run rather than at
+ * each emit site, so nothing added later — a new log line, a new verb — can
+ * forget the request id.
+ */
+function withRequestScope(deps: EngineDeps, scope: RequestScope): EngineDeps {
+  return {
+    ...deps,
+    logger: childLogger(deps.logger ?? silentLogger, scope),
+    ...(deps.audit && { audit: scopedAuditSink(deps.audit, scope) }),
+  };
+}
 
 function makeRecordOutcome(
   deps: EngineDeps,
@@ -237,9 +274,14 @@ function makeRecordOutcome(
 export async function execute(
   intent: PaymentIntent,
   corridor: Corridor,
-  deps: EngineDeps,
+  depsIn: EngineDeps,
   opts: ExecuteOptions = {},
 ): Promise<Outcome<RunResult>> {
+  // One request, one scope: when the caller names the request that started this
+  // run, every log line and audit entry below inherits that id — including the
+  // early refusals, which are exactly the ones an operator has to explain.
+  const scope = requestScopeOf(opts);
+  const deps = scope ? withRequestScope(depsIn, scope) : depsIn;
   const store = deps.idempotency ?? new InMemoryIdempotencyStore();
   const now = deps.now ?? (() => Date.now());
   const sleep = deps.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
