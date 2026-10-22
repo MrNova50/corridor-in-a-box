@@ -7,6 +7,40 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Breaking — `StellarSettlementSubmitter` refuses mainnet unless it is opted in ([#275](https://github.com/ezedike-evan/corridor-in-a-box/issues/275))
+
+The "don't move real money by accident" check lived only in the example
+launchers (`examples/run-testnet.ts`, `examples/run-service.ts`,
+`scripts/assert-testnet-corridor.ts`), so an embedder wiring the library
+together themselves inherited no guard at all: the submitter picked the network
+straight from the manifest and signed whatever `settlement.network` said.
+
+- `packages/stellar`: `StellarSubmitterOptions.allowedNetworks`
+  (`readonly ("public" | "testnet")[]`) **defaults to `["testnet"]`**. A
+  corridor on a network that is not listed is refused with a non-retryable
+  `SETTLEMENT_FAILED` before `loadAccount()`, so a refusal costs no sequence
+  number, no signature and no transaction. **Embedders that settle on public
+  must now pass `allowedNetworks: ["testnet", "public"]`** — that is the whole
+  point, but it is a breaking construction-time change.
+- `packages/stellar`: a `LocalKeypairSigner` (including one built from
+  `signerSecret`) is refused on public unless `allowLocalSignerOnMainnet: true`
+  is also passed, per docs/key-management.md: a seed living in the application
+  process is a testnet convenience, not a mainnet custody model.
+- `packages/stellar`: the Horizon endpoint's own `network_passphrase` is read
+  from its root resource once, lazily, and compared with the corridor's
+  network — a testnet manifest pointed at a mainnet Horizon (or the reverse)
+  is refused rather than signed. An endpoint that cannot be reached fails
+  retryably; nothing was submitted, so retrying is safe. `fetchHorizonRoot` is
+  the test seam; the check is skipped when a fake `horizonServer` is injected
+  without it.
+- `examples/run-service.ts` and `examples/run-testnet.ts`: the submitter is
+  constructed with `allowedNetworks` derived from `CORRIDOR_ALLOW_MAINNET=1`,
+  so the launcher's opt-in and the signer's guard cannot drift apart.
+- `tests/stellar.test.ts`: public corridor without opt-in → refused with no
+  `loadAccount` call; local signer on public refused even with the network
+  allowed; explicit ack settles; endpoint/corridor passphrase mismatch refused
+  (root read once); unverifiable endpoint retryable.
+
 ### Fixed — `web/` reads corridor data and the state list from the repo, not hand copies ([#293](https://github.com/ezedike-evan/corridor-in-a-box/issues/293))
 
 `web/lib/corridors.ts` had hand-copied four of the six manifests and kept its
