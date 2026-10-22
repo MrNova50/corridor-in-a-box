@@ -7,6 +7,30 @@ follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it reache
 
 ## [Unreleased]
 
+### Added — every service request carries an `X-Request-Id` into the logs and the audit trail ([#269](https://github.com/ezedike-evan/corridor-in-a-box/issues/269))
+
+Engine logs and audit entries only carried `idempotencyKey` and `corridorId`,
+and the service neither assigned nor returned a request id — so an operator
+handed a `500` and a log file had no way to tie the two together.
+
+- `packages/service`: `server()` accepts an inbound `X-Request-Id` and echoes
+  it back on every response, including the transport-owned ones (413, 400 from
+  invalid JSON, 401, 404, 429, 500). An inbound id is used only if it is
+  `[A-Za-z0-9._-]{1,128}`; anything else is replaced with a fresh
+  `crypto.randomUUID()`, so a client cannot inject a log line or a header.
+- `packages/service`: `RouteResponse` gained `headers`, and `RouteRequest`
+  gained `requestId` / `traceparent`, so `route()` stays a pure function that
+  can be driven without a socket.
+- `packages/service`: a W3C `traceparent` is validated and passed through as a
+  field on the response and on every log line (full tracing is a separate
+  concern).
+- `packages/engine`: `ExecuteOptions.requestId` / `traceparent` scope the run —
+  `Logger.child(fields)` (new optional member, with `childLogger()` falling back
+  to merging for third-party loggers) and `scopedAuditSink()` wrap the deps once,
+  so _every_ emit site of a run inherits the id: transitions, the pre-settle
+  gate detail, reconcile polls, halt notices. `AuditEntry` and `AuditDetail`
+  gained optional `requestId` / `traceparent`.
+
 ### Fixed — `web/` reads corridor data and the state list from the repo, not hand copies ([#293](https://github.com/ezedike-evan/corridor-in-a-box/issues/293))
 
 `web/lib/corridors.ts` had hand-copied four of the six manifests and kept its
