@@ -41,6 +41,28 @@ straight from the manifest and signed whatever `settlement.network` said.
   allowed; explicit ack settles; endpoint/corridor passphrase mismatch refused
   (root read once); unverifiable endpoint retryable.
 
+### Added — `tests/service-http.test.ts`: the service transport, tested over a socket ([#281](https://github.com/ezedike-evan/corridor-in-a-box/issues/281))
+
+`tests/service.test.ts` drives the pure `route()` in-process, which is the right
+way to test routing — but the transport in `server()` was mostly invisible to
+it: JSON parsing, the lowercasing of inbound headers, `resolveClientIp()` /
+`trustProxy`, the content types written on the way out, and the catch-all that
+turns an unexpected throw into a 500. Only the two body-size cases went through
+a real socket.
+
+- New black-box suite: mock adapters, mock submitter, a server on port 0, and
+  assertions on status bytes, headers and response bodies. It covers POST
+  `/payments` → 200 and reading that key back, 401 without a key, a mixed-case
+  `Authorization` still authenticating, a cross-tenant `GET /payments/:key` →
+  404, 429 after the token bucket drains, `/metrics` served as
+  `text/plain; version=0.0.4` verbatim and unmetered, a forged
+  `X-Forwarded-For` ignored by default and honoured under `trustProxy`, invalid
+  JSON → 400, and a rejecting store → 500 with the same server still answering
+  the next request.
+- Servers are closed through `gracefulShutdown()` in `afterEach`, not
+  `server.close()`, so nothing outlives the test.
+- 12 tests, ~0.3 s. No production code changed.
+
 ### Fixed — `web/` reads corridor data and the state list from the repo, not hand copies ([#293](https://github.com/ezedike-evan/corridor-in-a-box/issues/293))
 
 `web/lib/corridors.ts` had hand-copied four of the six manifests and kept its
